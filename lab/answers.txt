@@ -1,1 +1,40 @@
 ## Place your answers here.
+在zookd.c的process_client中调用http_request_line()以及http_request_headers()时，由于调用url_decode()时未检查数组size，存在的可能溢出的缓存
+url_decode(char *dst, const char *src) {
+    for (;;) {
+        if (condition) {
+            // …… some codes
+        } …… else {
+            *dst = *src;
+            src++;
+            if (*dst == '\0') //一直复制到src为止
+                break;
+        }
+    }
+}
+1. http_request_line()中可能溢出的缓存
+http_request_line()中逻辑如下：
+通过http_read_line()将请求读入size=8192的buffer，进行简单校验的请求方式等格式校验后，调用url_decode()，填充size=4096的reqpath数组。
+const char *http_request_line(int fd, char *reqpath, char *env, size_t *env_len)
+{
+    static char buf[8192];
+    char* sp1; 
+    //…… some codes
+
+    if (http_read_line(fd, buf, sizeof(buf)) < 0)
+        return "Socket IO error";
+    //…… some codes
+    url_decode(reqpath, sp1);
+    //…… some codes
+    return NULL
+}
+在http_read_line()中检查了buffer的size，因此不会缓存溢出；
+在url_decode(char *dst, const char *src)中存在可能溢出的位置：
+    传入的参数为两个数组指针，这里分别是reqpath[4096]和最大长度为8192的buffer，但是未将size一同传入，在内部循环复制时，
+    一直到src='\0'时停止，len(src)>len(dst)，利用dst和src的长度差值，使用足够长的输入行覆盖最大容量4096的reqpath数组，
+    从而覆盖http_request_line()的返回地址
+
+2. http_request_headers()中可能溢出的缓存
+与http_request_line()中情况类似，调用url_decode()时传入参数分别为value[512]和最大长度为8192的buffer，
+当有足够长的输入就可以覆盖http_request_headers()的返回地址
+
